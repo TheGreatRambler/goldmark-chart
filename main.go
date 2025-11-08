@@ -3,6 +3,7 @@ package goldmark_chart
 import (
 	"bytes"
 	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -259,7 +260,7 @@ func (r *HTMLRenderer) Render(w util.BufWriter, src []byte, node ast.Node, enter
 	// Generate ID for div
 	div_id_hash := sha256.New()
 	div_id_hash.Write(input_b)
-	div_id := div_id_hash.Sum(nil)
+	div_id := hex.EncodeToString(div_id_hash.Sum(nil))
 
 	out = append(out, []byte(fmt.Sprintf(`<div id="%s" width="100%%"></div>`, div_id))...)
 
@@ -270,7 +271,7 @@ func (r *HTMLRenderer) Render(w util.BufWriter, src []byte, node ast.Node, enter
 		return ast.WalkContinue, err
 	}
 
-	out = append(out, []byte(BuildChartJS(string(div_id), chart_data))...)
+	out = append(out, []byte(BuildChartJS(div_id, chart_data))...)
 
 	_, err = w.Write(out)
 	return ast.WalkContinue, err
