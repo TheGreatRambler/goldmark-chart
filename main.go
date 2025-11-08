@@ -15,8 +15,6 @@ import (
 	"github.com/yuin/goldmark/renderer"
 	"github.com/yuin/goldmark/text"
 	"github.com/yuin/goldmark/util"
-	"golang.org/x/text/cases"
-	"golang.org/x/text/language"
 )
 
 // Chart node used instead of handling `ast.FencedCodeBlock` instances
@@ -95,28 +93,49 @@ type RenderPoint struct {
 
 type RenderChartData struct {
 	Type        string
+	Height      string
+	Label       string
+	Title       string
 	Points      []RenderPoint
 	KeysNumeric bool
+	Color       string
 }
 
 func ParseChartData(input string) (RenderChartData, error) {
 	lines := strings.Split(strings.TrimSpace(input), "\n")
+
 	var chart_type string
+	var chart_height string
+	var chart_label string
+	var chart_title string
+	var chart_color string
+
 	var data_lines []string
 	in_data := false
 
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "layout:") {
+		switch {
+		case strings.HasPrefix(line, "layout:"):
 			chart_type = strings.TrimSpace(strings.TrimPrefix(line, "layout:"))
-		} else if strings.HasPrefix(line, "data:") {
+		case strings.HasPrefix(line, "height:"):
+			chart_height = strings.TrimSpace(strings.TrimPrefix(line, "height:"))
+		case strings.HasPrefix(line, "label:"):
+			chart_label = strings.TrimSpace(strings.TrimPrefix(line, "label:"))
+		case strings.HasPrefix(line, "title:"):
+			chart_title = strings.TrimSpace(strings.TrimPrefix(line, "title:"))
+		case strings.HasPrefix(line, "color:"):
+			chart_color = strings.TrimSpace(strings.TrimPrefix(line, "color:"))
+		case strings.HasPrefix(line, "data:"):
 			in_data = true
 			// add everything after `data:` in this line (if `[ ...` is on same line)
 			if i := strings.Index(line, "["); i != -1 {
 				data_lines = append(data_lines, line[i:])
 			}
-		} else if in_data {
-			data_lines = append(data_lines, line)
+		default:
+			if in_data {
+				data_lines = append(data_lines, line)
+			}
 		}
 	}
 
@@ -127,7 +146,7 @@ func ParseChartData(input string) (RenderChartData, error) {
 		return RenderChartData{}, errors.New("data not found")
 	}
 
-	// Join and make sure JSON syntax is valid
+	// Join and normalize to valid JSON
 	data_str := strings.Join(data_lines, "\n")
 	data_str = strings.TrimSuffix(data_str, "]")
 	data_str = strings.TrimSpace(data_str)
@@ -138,12 +157,10 @@ func ParseChartData(input string) (RenderChartData, error) {
 		data_str = data_str + "]"
 	}
 
-	// Replace keys like `key:` and `value:` with JSON keys `"key":`
+	// Replace loose keys and quotes to JSON-compatible
 	data_str = strings.ReplaceAll(data_str, "key:", `"key":`)
 	data_str = strings.ReplaceAll(data_str, "value:", `"value":`)
-	// Quote unquoted object keys and make valid JSON
 	data_str = strings.ReplaceAll(data_str, "'", `"`)
-	// Ensure trailing commas don't break parsing
 	data_str = strings.ReplaceAll(data_str, ", }", "}")
 	data_str = strings.ReplaceAll(data_str, ",]", "]")
 
@@ -162,12 +179,15 @@ func ParseChartData(input string) (RenderChartData, error) {
 
 	return RenderChartData{
 		Type:        chart_type,
+		Height:      chart_height,
+		Label:       chart_label,
+		Title:       chart_title,
 		Points:      points,
 		KeysNumeric: keys_numeric,
+		Color:       chart_color,
 	}, nil
 }
 
-// BuildChartJS returns a <script> tag string for Chart.js.
 func BuildChartJS(div_id string, cd RenderChartData) string {
 	// Normalize type
 	t := strings.ToLower(strings.TrimSpace(cd.Type))
@@ -184,39 +204,70 @@ func BuildChartJS(div_id string, cd RenderChartData) string {
 		labels[i] = p.Key
 		values[i] = p.Value
 	}
-	labels_json, _ := json.Marshal(labels)
-	values_json, _ := json.Marshal(values)
+	labelsJSON, _ := json.Marshal(labels)
+	valuesJSON, _ := json.Marshal(values)
 
-	// Dataset changes a bit for pie (needs per-slice colors; no y-scale)
+	// UI color (text/grid). Default if not provided.
+	uiColor := cd.Color
+	if strings.TrimSpace(uiColor) == "" {
+		uiColor = "#dddddd"
+	}
+	uiColorJSON, _ := json.Marshal(uiColor)
+
+	// Title text: prefer Title; fallback to Label; if both empty, hide title.
+	titleText := cd.Title
+	if strings.TrimSpace(titleText) == "" {
+		titleText = cd.Label
+	}
+	titleJSON, _ := json.Marshal(titleText)
+	titleDisplay := "false"
+	if strings.TrimSpace(titleText) != "" {
+		titleDisplay = "true"
+	}
+
+	// Dataset (no explicit colors -> keep Chart.js defaults)
 	dataset := fmt.Sprintf(`{
-      label: %q,
-      data: %s,
-      borderWidth: 1
-    }`, cases.Title(language.English).String(t), values_json)
+		label: %q,
+		data: %s,
+		borderWidth: 1
+	}`, cd.Label, valuesJSON)
 
-	options := `{}`
-
-	// Generate options
+	// Options: style only the UI
+	options := ""
 	if t == "pie" {
-		dataset = fmt.Sprintf(`{
-    		label: %q,
-    		data: %s,
-    		backgroundColor: labels.map((_, i) => 'hsl(' + (i * 360 / Math.max(1, labels.length)) + ',70%%,60%%)'),
-    		borderWidth: 1
-    	}`, "Series", values_json)
-		// pie: no scales
-		options = `{}`
+		// Pie has no scales; just legend + title styling
+		options = fmt.Sprintf(`{
+			responsive: true,
+			maintainAspectRatio: false,
+			plugins: {
+				legend: { labels: { color: %s } },
+				title: { display: %s, text: %s, color: %s }
+			}
+		}`, uiColorJSON, titleDisplay, titleJSON, uiColorJSON)
 	} else {
-		// bar/line: keep a simple y scale
-		options = `{
-      		scales: {
-      			y: { beginAtZero: true }
-      		}
-    	}`
+		// Bar/Line: add axes styling and subtle gridline color
+		options = fmt.Sprintf(`{
+			responsive: true,
+			maintainAspectRatio: false,
+			plugins: {
+				legend: { labels: { color: %s } },
+				title:  { display: %s, text: %s, color: %s }
+			},
+			scales: {
+				x: {
+					ticks: { color: %s },
+					grid:  { color: "rgba(255,255,255,0.1)" }
+				},
+				y: {
+					ticks: { color: %s },
+					grid:  { color: "rgba(255,255,255,0.1)" }
+				}
+			}
+		}`, uiColorJSON, titleDisplay, titleJSON, uiColorJSON, uiColorJSON, uiColorJSON)
 	}
 
 	return fmt.Sprintf(`
-	<script>
+	<script defer>
 		(function () {
 			const ctx = document.getElementById("%s").getContext("2d");
 			const labels = %s;
@@ -231,7 +282,7 @@ func BuildChartJS(div_id string, cd RenderChartData) string {
 			};
 			new Chart(ctx, config);
 		})();
-	</script>`, div_id, labels_json, dataset, t, options)
+	</script>`, div_id, labelsJSON, dataset, t, options)
 }
 
 // Finally render
@@ -241,8 +292,6 @@ func (r *HTMLRenderer) Render(w util.BufWriter, src []byte, node ast.Node, enter
 		// We do not do anything at the closing tag
 		return ast.WalkContinue, nil
 	}
-
-	w.WriteString(`<div class="d2">`)
 
 	input_b := []byte{}
 	lines := n.Lines()
@@ -262,14 +311,14 @@ func (r *HTMLRenderer) Render(w util.BufWriter, src []byte, node ast.Node, enter
 	div_id_hash.Write(input_b)
 	div_id := hex.EncodeToString(div_id_hash.Sum(nil))
 
-	out = append(out, []byte(fmt.Sprintf(`<div id="%s" width="100%%"></div>`, div_id))...)
-
 	// Get chart data
 	chart_data, err := ParseChartData(string(input_b))
 	if err != nil {
 		// Currently just ignore
 		return ast.WalkContinue, err
 	}
+
+	out = append(out, []byte(fmt.Sprintf(`<div style="position:relative;width:100%%;height:%s"><canvas id="%s"></canvas></div>`, chart_data.Height, div_id))...)
 
 	out = append(out, []byte(BuildChartJS(div_id, chart_data))...)
 
