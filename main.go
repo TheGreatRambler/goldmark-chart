@@ -1,4 +1,4 @@
-package chart
+package goldmark_chart
 
 import (
 	"bytes"
@@ -277,11 +277,11 @@ func (r *HTMLRenderer) Render(w util.BufWriter, src []byte, node ast.Node, enter
 }
 
 // Instance used as extension
-type GoldmarkChart struct {
+type Chart struct {
 	// Options
 }
 
-func (e *GoldmarkChart) Extend(m goldmark.Markdown) {
+func (e *Chart) Extend(m goldmark.Markdown) {
 	m.Parser().AddOptions(parser.WithASTTransformers(
 		util.Prioritized(&Transformer{}, 100),
 	))
