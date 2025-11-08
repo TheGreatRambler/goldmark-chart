@@ -1,4 +1,4 @@
-module tgrcode.com/goldmark-chart
+module github.com/TheGreatRambler/goldmark-chart
 
 go 1.24.0
 
