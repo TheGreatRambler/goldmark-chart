@@ -87,7 +87,7 @@ func (r *HTMLRenderer) RegisterFuncs(reg renderer.NodeRendererFuncRegisterer) {
 }
 
 type RenderPoint struct {
-	Key   string
+	Key   interface{} `json:"key,string"`
 	Value float64
 }
 
@@ -166,14 +166,17 @@ func ParseChartData(input string) (RenderChartData, error) {
 
 	var points []RenderPoint
 	if err := json.Unmarshal([]byte(data_str), &points); err != nil {
-		return RenderChartData{}, fmt.Errorf("failed to parse data: %w", err)
+		return RenderChartData{}, fmt.Errorf("failed to parse chart data: %w", err)
 	}
 
 	keys_numeric := true
 	for _, p := range points {
-		if _, err := fmt.Sscanf(p.Key, "%f", new(float64)); err != nil {
-			keys_numeric = false
-			break
+		key, ok := p.Key.(string)
+		if ok {
+			if _, err := fmt.Sscanf(key, "%v", new(float64)); err != nil {
+				keys_numeric = false
+				break
+			}
 		}
 	}
 
@@ -198,7 +201,7 @@ func BuildChartJS(div_id string, cd RenderChartData) string {
 	}
 
 	// Prepare labels and values
-	labels := make([]string, len(cd.Points))
+	labels := make([]interface{}, len(cd.Points))
 	values := make([]float64, len(cd.Points))
 	for i, p := range cd.Points {
 		labels[i] = p.Key
